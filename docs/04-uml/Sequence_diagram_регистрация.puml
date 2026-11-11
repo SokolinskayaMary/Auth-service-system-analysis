@@ -1,0 +1,165 @@
+@startuml Регистрация пользователя по номеру телефона 
+title Регистрация пользователя по номеру телефона 
+
+actor User
+participant "Registration UI" as UI
+participant "API Gateway" as Gateway
+participant "Registration Service" as Reg
+participant "Identity Provider (IdP)" as IdP
+participant "Verification Service" as Verify
+participant "SMS Provider" as SMS
+database "User DB" as UserDB
+
+== Step 1: Ввод номера телефона ==
+User -> UI : Ввод номера телефона
+activate UI
+UI -> Gateway : POST /auth/register/start\nBody: {phone}
+activate Gateway
+Gateway -> Reg : Инициация регистрации
+deactivate Gateway
+
+== Step 2: Проверка уникальности номера==
+activate Reg
+Reg -> IdP : Проверка существования номера
+activate IdP
+IdP -> UserDB : SELECT user WHERE phone = ?
+activate UserDB
+UserDB --> IdP : Результат поиска
+deactivate UserDB
+
+alt Телефон уже зарегистрирован
+    IdP --> Reg : Пользователь существует
+    Reg --> Gateway : Ошибка 409 Conflict\n{ code: "PHONE_ALREADY_EXISTS" }
+    activate Gateway
+    Gateway --> UI : Показать ошибку 409: "Номер уже зарегистрирован"
+    deactivate Gateway
+    UI --> User: Отображение уведомления
+
+else Телефон не найден
+    IdP --> Reg : OK (уникальный), пользователь не найден
+    deactivate IdP
+
+    == Step 3. Отправка SMS-кода ==
+    Reg -> Verify : Сгенерировать SMS-код\nдля указанного телефона
+    activate Verify
+    Verify -> SMS : Отправить смс-код
+    activate SMS
+    SMS --> Verify : SMS принято к отправке
+    deactivate SMS
+    Verify --> Reg : Код отправлен\nattempts_remaining = 3
+    deactivate Verify
+    Reg --> Gateway : 202 Accepted\n{destination_masked,\nattempts_remaining}
+    deactivate Reg
+    activate Gateway
+    Gateway --> UI : 202 Accepted
+    deactivate Gateway
+    UI --> User : Показать экран ввода SMS-кода
+    deactivate UI
+
+    opt Пользователь не получил SMS
+        User -> UI : Нажать "Отправить код повторно"
+        activate UI
+        UI -> Gateway : POST /auth/register/resend\nBody: {phone, challenge_id}
+        activate Gateway
+        Gateway -> Reg : Повторно отправить код на \nphone
+        activate Reg
+        Reg -> Verify : Сгенерировать новый SMS-код
+        activate Verify
+        Verify -> SMS : Отправить новый SMS-код
+        activate SMS
+        SMS --> Verify : SMS принято к отправке
+        deactivate SMS
+        Verify --> Reg : Новый код отправлен\nattempts_remaining = 3
+        deactivate Verify
+        Reg --> Gateway : 202 Accepted\n{destination_masked,\nattempts_remaining}
+        deactivate Reg
+        Gateway --> UI : 202 Accepted
+        deactivate Gateway
+        UI --> User : Сообщить о повторной отправке кода
+        deactivate UI
+    end
+
+    == Step 4. Проверка SMS-кода ==
+    User -> UI : Ввод SMS-кода
+    activate UI
+    UI -> Gateway : POST /auth/register/verify\nBody: {phone, code, challenge_id}
+    activate Gateway
+    Gateway -> Reg : Проверить смс-кода: phone, код
+    activate Reg
+    Reg -> Verify : Проверить код
+    activate Verify
+
+    alt Код неверный, попытки остались
+        Verify --> Reg : Код неверный
+        Reg --> Gateway : 400 Bad Request\n{code: "INVALID_VERIFICATION_CODE",\nmessage: "Код подтверждения неверен"}
+        Gateway --> UI : 400 Bad Request
+        UI --> User : Показать ошибку\nи разрешить повторный ввод
+
+        note right of UI
+          Пользователь повторно вызывает
+          POST /auth/register/verify,
+          пока не исчерпаны попытки.
+        end note
+
+    else Попытки исчерпаны
+        Verify --> Reg : Лимит попыток исчерпан
+        Reg --> Gateway : 429 Too Many Requests\n{code: "TOO_MANY_ATTEMPTS",\nmessage: "Превышен допустимый лимит попыток"}
+        Gateway --> UI : 429 Too Many Requests
+        UI --> User : Сообщить о превышении\nлимита попыток
+
+    else Код верный
+        Verify --> Reg : Код подтверждён\nСтатус попытки = VERIFIED
+        deactivate Verify
+        Reg --> Gateway : 200 OK\n{phone, verified: true}
+        deactivate Reg
+        Gateway --> UI : 200 OK\n{phone, verified: true}
+        deactivate Gateway
+        UI --> User : Показать форму\nзавершения регистрации
+        deactivate UI
+
+        == Step 5: Ввод данных для регистрации ==
+        User -> UI : Ввод ФИО, даты рождения,\nответа на секретный вопрос,\nпароля
+        activate UI
+        UI -> Gateway : POST /auth/register/complete\nBody: {phone, challenge_id, full_name, birth_date,\nsecret_answer, password, device}
+        activate Gateway
+        Gateway -> Reg : Завершить регистрацию
+        activate Reg
+
+        == Step 6. Проверка подтверждения номера ==
+        Reg -> Verify : Проверить, что номер\nранее подтверждён
+        activate Verify
+        Verify --> Reg : verified = true
+        deactivate Verify
+
+        == Step 7. Создание пользователя ==
+        Reg -> IdP : Создать пользователя\nrole = USER, status = ACTIVE
+        activate IdP
+        IdP -> UserDB : INSERT user\n(phone, full_name, birth_date,\npassword_hash, secret_answer_hash,\nrole = USER, status = ACTIVE)
+        activate UserDB
+        UserDB --> IdP : Пользователь создан
+        deactivate UserDB
+        IdP --> Reg : user_id + данные пользователя
+        deactivate IdP
+        
+        == Step 8. Создание сессии ==
+        Reg -> IdP : Создать сессию\n{user_id, device}
+        activate IdP
+        IdP --> Reg : session_id
+        deactivate IdP
+        
+        == Step 9. Выпуск токенов ==
+        Reg -> IdP : Сгенерировать access + refresh\n{user_id, session_id}
+        activate IdP
+        IdP --> Reg : access_token + refresh_token\n+ access_expires_in
+        deactivate IdP
+        
+        == Step 10. Ответ пользователю ==
+        Reg --> Gateway : 201 Created\n{tokens, user}
+        deactivate Reg
+        Gateway --> UI : 201 Created\n{tokens, user}
+        deactivate Gateway
+        UI --> User : Регистрация успешно завершена
+        deactivate UI
+    end
+end
+@enduml

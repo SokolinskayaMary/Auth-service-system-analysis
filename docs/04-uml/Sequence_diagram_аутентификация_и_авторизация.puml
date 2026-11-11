@@ -1,0 +1,153 @@
+@startuml Аутентификация и авторизация пользователя
+title Аутентификация и авторизация пользователя
+
+actor User
+participant "Authentication UI" as UI
+participant "API Gateway" as Gateway
+participant "Identity Provider (IdP)" as IdP
+participant "Verification Service" as Verify
+participant "SMS Provider" as SMS
+database "User DB" as UserDB
+participant "Protected Service" as Resource
+
+== Часть 1. Аутентификация ==
+
+User -> UI : Ввод номера телефона и пароля
+activate UI
+UI -> Gateway : POST /auth/login\nBody: {phone, password, device}
+activate Gateway
+Gateway -> IdP : Аутентифицировать пользователя\n{phone, password, device}
+activate IdP
+
+IdP -> UserDB : SELECT user WHERE phone = ?
+activate UserDB
+UserDB --> IdP : Данные пользователя\n+ password_hash + role + status
+deactivate UserDB
+
+alt Неверный номер телефона или пароль
+    IdP --> Gateway : 401 Unauthorized\n{code: "INVALID_CREDENTIALS"}
+    Gateway --> UI : 401 Unauthorized
+    UI --> User : Показать ошибку
+
+else Пользователь BLOCKED
+    IdP --> Gateway : 403 Forbidden\n{code: "ACCOUNT_BLOCKED"}
+    Gateway --> UI : 403 Forbidden
+    UI --> User : Доступ к системе запрещён
+
+else Учётные данные верны, status = ACTIVE или INACTIVE
+    IdP -> IdP : Проверить количество активных сессий
+
+    alt Подключено 3 устройства
+        IdP --> Gateway : 409 Conflict\n{code: "DEVICE_LIMIT_REACHED"}
+        Gateway --> UI : 409 Conflict
+        UI --> User : Сообщить о достигнутом лимите устройств
+    else Лимит не превышен
+        alt 2FA отключена
+          opt status был INACTIVE
+            IdP -> DB : UPDATE status = ACTIVE
+            activate DB
+            DB --> IdP : OK
+            deactivate DB
+          end
+            IdP -> IdP : Создать сессию для device
+            IdP -> IdP : Выпустить access_token и refresh_token
+            IdP --> Gateway : 200 OK\n{tokens, user}
+            Gateway --> UI : 200 OK\n{tokens, user}
+            UI --> User : Вход выполнен
+        else 2FA включена
+            IdP -> Verify : Сгенерировать SMS-код
+            activate Verify
+            Verify -> SMS : Отправить SMS-код
+            activate SMS
+            SMS --> Verify : SMS принято к отправке
+            deactivate SMS
+            Verify --> IdP : Код отправлен\n+ challenge_id\n+ attempts_remaining = 3
+            deactivate Verify
+            IdP --> Gateway : 202 Accepted\n{challenge_id, second_factor_required: true}
+            deactivate IdP
+            Gateway --> UI : 202 Accepted
+            deactivate Gateway
+            UI --> User : Показать экран ввода SMS-кода
+            deactivate UI
+
+            User -> UI : Ввод SMS-кода
+            activate UI
+            UI -> Gateway : POST /auth/login/verify\nBody: {challenge_id, code}
+            activate Gateway
+            Gateway -> IdP : Проверить второй фактор
+            activate IdP
+            IdP -> Verify : Проверить SMS-код
+            activate Verify
+            alt Код неверный, попытки остались
+                Verify --> IdP : Код неверный
+                IdP --> Gateway : 400 Bad Request\n{code: "INVALID_VERIFICATION_CODE"}
+                Gateway --> UI : 400 Bad Request
+                UI --> User : Показать ошибку
+            else Попытки исчерпаны
+                Verify --> IdP : Лимит попыток исчерпан
+                IdP --> Gateway : 429 Too Many Requests\n{code: "TOO_MANY_ATTEMPTS"}
+                Gateway --> UI : 429 Too Many Requests
+                UI --> User : Сообщить о превышении лимита
+            else Код верный
+                Verify --> IdP : Второй фактор подтверждён
+                deactivate Verify
+                IdP -> IdP : Создать сессию для device
+                IdP -> IdP : Выпустить access_token и refresh_token
+                IdP --> Gateway : 200 OK\n{tokens, user}
+                deactivate IdP
+                Gateway --> UI : 200 OK\n{tokens, user}
+                deactivate Gateway
+                UI --> User : Вход выполнен
+                deactivate UI
+            end
+        end
+    end
+end
+
+== Часть 2. Авторизация защищённого запроса ==
+
+User -> UI : Выполнить защищённое действие
+activate UI
+UI -> Gateway : HTTP request\nAuthorization: Bearer <access_token>
+activate Gateway
+Gateway -> Gateway : Проверить подпись JWT и exp
+
+alt Access-токен отсутствует, недействителен или истёк
+    Gateway --> UI : 401 Unauthorized
+    UI --> User : Требуется повторная аутентификация
+
+else Access-токен валиден
+    Gateway -> Resource : Передать запрос\n+ user_id + role из access_token
+    activate Resource
+
+    Resource -> IdP : Проверить текущий status и role
+    activate IdP
+    IdP -> UserDB : SELECT status, role WHERE user_id = ?
+    activate UserDB
+    UserDB --> IdP : status + role
+    deactivate UserDB
+    IdP --> Resource : status + role
+    deactivate IdP
+
+    alt status != ACTIVE
+        Resource --> Gateway : 403 Forbidden\n{code: "FORBIDDEN"}
+        Gateway --> UI : 403 Forbidden
+        UI --> User : Доступ запрещён
+
+    else Роль не даёт доступ к операции
+        Resource --> Gateway : 403 Forbidden\n{code: "FORBIDDEN"}
+        Gateway --> UI : 403 Forbidden
+        UI --> User : Недостаточно прав
+
+    else Доступ разрешён
+        Resource -> Resource : Выполнить операцию
+        Resource --> Gateway : 200 OK\nResponse
+        deactivate Resource
+        Gateway --> UI : 200 OK\nResponse
+        deactivate Gateway
+        UI --> User : Показать результат
+        deactivate UI
+    end
+end
+
+@enduml
