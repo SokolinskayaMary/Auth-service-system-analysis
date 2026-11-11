@@ -59,7 +59,7 @@
 
 | Раздел | Содержание |
 |---|---|
-| `01-requirements` | [📄 Техническое задание](docs/01-requirements/technical-specification.md), User Stories, Use Cases |
+| `01-requirements` |[Интервью по сбору требований](docs/01-requirements/interview.md), [Техническое задание](docs/01-requirements/technical-specification.md), User Stories, Use Cases |
 | `02-business-processes` | BPMN-диаграммы бизнес-процессов |
 | `03-architecture` | Архитектура и обоснование проектных решений |
 | `04-uml` | Sequence- и State-диаграммы |
