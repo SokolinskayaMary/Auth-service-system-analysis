@@ -44,10 +44,10 @@ else Учётные данные верны, status = ACTIVE или INACTIVE
     else Лимит не превышен
         alt 2FA отключена
           opt status был INACTIVE
-            IdP -> DB : UPDATE status = ACTIVE
-            activate DB
-            DB --> IdP : OK
-            deactivate DB
+            IdP -> UserDB : UPDATE status = ACTIVE
+            activate UserDB
+            UserDB --> IdP : OK
+            deactivate UserDB
           end
             IdP -> IdP : Создать сессию для device
             IdP -> IdP : Выпустить access_token и refresh_token
