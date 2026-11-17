@@ -1,0 +1,1238 @@
+openapi: 3.1.0
+info:
+  title: Authentication and Authorization API
+  version: 3.1.0
+  description:
+    Целевая OpenAPI-спецификация системы аутентификации и авторизации.
+    Регистрация и обычная аутентификация выполняются только по номеру телефона.
+    Двухфакторная аутентификация выполняется только по SMS.
+servers:
+  - url: /api/v1
+tags:
+  - name: Registration
+  - name: Authentication
+  - name: Sessions
+  - name: Profile
+  - name: TwoFactor
+  - name: PasswordRecovery
+  - name: ExternalIdentity
+  - name: Administration
+paths:
+  /auth/register/start:
+    post:
+      tags:
+        - Registration
+      operationId: startRegistration
+      summary: Начать регистрацию по номеру телефона
+      description:
+        Вызывается после ввода номера телефона. Система проверяет, что номер ещё не зарегистрирован,
+        генерирует код подтверждения и отправляет его по SMS.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterStartRequest"
+      responses:
+        "202":
+          description: SMS-код отправлен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SmsCodeSentResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: Номер телефона уже зарегистрирован
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: PHONE_ALREADY_EXISTS
+                message: Номер телефона уже зарегистрирован
+        "429":
+          $ref: "#/components/responses/TooManyAttempts"
+  /auth/register/resend:
+    post:
+      tags:
+        - Registration
+      operationId: resendRegistrationCode
+      summary: Повторно отправить SMS-код регистрации
+      description:
+        Повторная отправка кода только для указанной незавершённой попытки. По согласованному упрощённому
+        контракту challenge_id сохраняется, предыдущий код отменяется; повторная отправка не обнуляет число неверных
+        попыток.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterResendRequest"
+            example:
+              phone: "+79637697590"
+              challenge_id: 7d9ee2b2-1ca7-4691-8d89-6e8c012eae17
+      responses:
+        "202":
+          description: Новый SMS-код отправлен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SmsCodeSentResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/TooManyAttempts"
+  /auth/register/verify:
+    post:
+      tags:
+        - Registration
+      operationId: verifyRegistrationCode
+      summary: Подтвердить SMS-код регистрации
+      description:
+        Проверяет SMS-код и помечает серверную попытку регистрации как подтверждённую; пользователь ещё
+        не создаётся. Успех привязан к защищённому контексту клиента, самого знания challenge_id недостаточно для
+        завершения чужой регистрации.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterVerifyRequest"
+            example:
+              phone: "+79637697590"
+              challenge_id: 7d9ee2b2-1ca7-4691-8d89-6e8c012eae17
+              code: "12345"
+      responses:
+        "200":
+          description: Номер подтверждён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterVerifyResponse"
+              example:
+                phone: "+79637697590"
+                challenge_id: 7d9ee2b2-1ca7-4691-8d89-6e8c012eae17
+                verified: true
+        "400":
+          $ref: "#/components/responses/InvalidVerificationCode"
+        "429":
+          $ref: "#/components/responses/TooManyAttempts"
+  /auth/register/complete:
+    post:
+      tags:
+        - Registration
+      operationId: completeRegistration
+      summary: Завершить регистрацию
+      description:
+        Создаёт пользователя только при подтверждённой, неизрасходованной и неистёкшей попытке; проверяет
+        соответствие телефона и защищённого клиентского контекста. Устанавливает USER/ACTIVE, создаёт сессию в IdP
+        и выдаёт токены. Повторное применение попытки запрещено.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterCompleteRequest"
+            example:
+              phone: "+79637697590"
+              challenge_id: 7d9ee2b2-1ca7-4691-8d89-6e8c012eae17
+              full_name: Иванов Иван Иванович
+              birth_date: "1994-02-18"
+              secret_answer: Орбита
+              password: N7m!q2Bv9#Lx
+              device:
+                device_id: web-4e95cfc3-15e4-4b42-bafb-1399c53a5f3d
+                platform: web
+                device_name: Chrome on Windows 11
+      responses:
+        "201":
+          description: Пользователь создан и аутентифицирован
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: Пользователь с указанным номером уже существует
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: PHONE_ALREADY_EXISTS
+                message: Номер телефона уже зарегистрирован
+        "403":
+          description: Попытка регистрации не подтверждена или не принадлежит клиенту
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: REGISTRATION_NOT_VERIFIED
+                message: Подтверждение регистрации не найдено
+        "410":
+          description: Попытка регистрации истекла или использована
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: REGISTRATION_CHALLENGE_EXPIRED
+                message: Попытка регистрации недействительна
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      operationId: login
+      summary: Войти по номеру телефона и паролю
+      description:
+        Проверяет номер телефона и пароль. Для BLOCKED — 403. Для INACTIVE допускает продолжение проверки;
+        при успешном завершении всех факторов IdP переводит статус в ACTIVE и выдаёт токены. Проверяет лимит трёх
+        подключённых устройств. При включённой 2FA сначала возвращает 202 с challenge_id, при выключенной — 200
+        с токенами.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+            example:
+              phone: "+79637697590"
+              password: N7m!q2Bv9#Lx
+              device:
+                device_id: web-4e95cfc3-15e4-4b42-bafb-1399c53a5f3d
+                platform: web
+                device_name: Chrome on Windows 11
+      responses:
+        "200":
+          description: Вход выполнен, второй фактор не требуется
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "202":
+          description: Требуется подтверждение SMS-кодом
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginChallengeResponse"
+        "401":
+          description: Неверный номер телефона или пароль
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: INVALID_CREDENTIALS
+                message: Неверный номер телефона или пароль
+        "403":
+          description: Учётная запись заблокирована администратором (BLOCKED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: ACCOUNT_BLOCKED
+                message: Аккаунт заблокирован
+        "409":
+          description: Достигнут лимит подключённых устройств
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: DEVICE_LIMIT_REACHED
+                message: Достигнут лимит из 3 устройств
+        "429":
+          $ref: "#/components/responses/TooManyAttempts"
+  /auth/login/verify:
+    post:
+      tags:
+        - Authentication
+      operationId: verifyLoginSecondFactor
+      summary: Подтвердить второй фактор входа
+      description:
+        Проверяет SMS-код конкретной попытки входа. До выдачи токенов IdP повторно проверяет, что аккаунт
+        не BLOCKED и есть свободный слот устройства. Успешный вход INACTIVE возвращает статус ACTIVE. Сессию и токены
+        создаёт IdP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginVerifyRequest"
+            example:
+              challenge_id: 92e901d4-24cd-4529-8238-1fbd9d06e9dc
+              code: "58310"
+      responses:
+        "200":
+          description: Второй фактор подтверждён, вход выполнен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "400":
+          $ref: "#/components/responses/InvalidVerificationCode"
+        "429":
+          $ref: "#/components/responses/TooManyAttempts"
+        "403":
+          description: Пользователь заблокирован во время подтверждения входа
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: ACCOUNT_BLOCKED
+                message: Аккаунт заблокирован
+        "409":
+          description: Нет свободного слота для нового устройства
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: DEVICE_LIMIT_REACHED
+                message: Достигнут лимит из 3 устройств
+  /auth/logout:
+    post:
+      tags:
+        - Authentication
+      operationId: logout
+      summary: Завершить текущую сессию
+      description:
+        Завершает текущую сессию и отзывает refresh-токен. Переход на экран входа выполняется клиентским
+        приложением.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogoutRequest"
+            example:
+              refresh_token: rt_01J5MQ2SS03TMGFXYBJVCRH86B
+      responses:
+        "204":
+          description: Сессия завершена
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /auth/refresh:
+    post:
+      tags:
+        - Authentication
+      operationId: refreshAccessToken
+      summary: Обновить access-токен по refresh-токену
+      description:
+        "Не требует действующего access-токена. Сервер проверяет refresh-токен и принадлежность активной
+        сессии, после чего возвращает актуальные токены. Действующая сессия обязательна: если с момента последней
+        активности прошло более 180 секунд, обновление отклоняется. При успешном обновлении refresh-токен ротируется."
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+            example:
+              refresh_token: rt_01J5MQ2SS03TMGFXYBJVCRH86B
+      responses:
+        "200":
+          description: Токены обновлены
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          description: Refresh-токен недействителен или сессия завершена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: INVALID_REFRESH_TOKEN
+                message: Refresh-токен недействителен или сессия завершена
+  /auth/sessions:
+    get:
+      tags:
+        - Sessions
+      operationId: listSessions
+      summary: Получить активные сессии и подключённые устройства
+      description:
+        Используется для управления подключёнными устройствами. Система поддерживает не более трёх устройств
+        одного пользователя. Возвращаются активные сессии не более трёх различных одновременно подключённых устройств.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Список активных сессий
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /auth/sessions/{session_id}:
+    delete:
+      tags:
+        - Sessions
+      operationId: terminateSession
+      summary: Завершить выбранную сессию
+      description:
+        Сервер проверяет принадлежность session_id текущему пользователю, завершает выбранную сессию
+        и отзывает связанный refresh-токен.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "204":
+          description: Сессия завершена
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Сессия не найдена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: SESSION_NOT_FOUND
+                message: Активная сессия не найдена
+  /auth/profile:
+    get:
+      tags:
+        - Profile
+      operationId: getCurrentProfile
+      summary: Получить профиль текущего пользователя
+      description:
+        Возвращает профиль владельца действующего access-токена. Проверяется действительность серверной
+        сессии, включая таймаут бездействия 180 секунд.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Профиль пользователя
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /auth/2fa:
+    patch:
+      tags:
+        - TwoFactor
+      operationId: updateTwoFactorSettings
+      summary: Включить или отключить двухфакторную аутентификацию
+      description: "Изменяет SMS-2FA. Для выключения required current_password: IdP повторно проверяет пароль."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFactorSettingsRequest"
+            example:
+              enabled: true
+      responses:
+        "200":
+          description: Настройки 2FA обновлены
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwoFactorSettings"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /auth/password/reset/start:
+    post:
+      tags:
+        - PasswordRecovery
+      operationId: startPasswordReset
+      summary: Запросить SMS-код для резеврного восстановления пароля
+      description:
+        Используется, если пользователь не помнит ответ на секретный вопрос. Создаёт SMS-попытку восстановления.
+        Ответ не должен раскрывать существование учётной записи.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetStartRequest"
+            example:
+              phone: "+79637697590"
+      responses:
+        "202":
+          description: Запрос принят
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SmsCodeSentResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/TooManyAttempts"
+  /auth/password/reset/confirm:
+    post:
+      tags:
+        - PasswordRecovery
+      operationId: confirmPasswordReset
+      summary: Подтвердить восстановление и изменить пароль
+      description: Проверяет один из двух способов подтверждения:секретный ответ либо SMS-код с challenge_id.
+        При успешной проверке изменяет пароль и отзывает предыдущие пользовательские сессии и refresh-токены.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetConfirmRequest"
+            example:
+              secretQuestion:
+               summary: Восстановление по секретному вопросу
+               value:
+                 phone: "+79637697590"
+                 secret_answer: "Орбита"
+                 new_password: S4f!p8Qz1#Km
+                 new_password_confirmation: S4f!p8Qz1#Km
+              sms:
+                summary: Восстановление по SMS-коду
+                value:
+                  phone: "+79637697590"
+                  challenge_id: 7d9ee2b2-1ca7-4691-8d89-6e8c012eae17
+                  code: "12345"
+                  new_password: S4f!p8Qz1#Km
+                  new_password_confirmation: S4f!p8Qz1#Km
+      responses:
+        "204":
+          description: Пароль изменён, старые сессии отозваны
+        "400":
+          description: Некорректный запрос или неверные подтверждающие данные
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: INVALID_RECOVERY_PROOF
+                message: Не удалось подтвердить восстановление пароля
+        "410":
+          description: Попытка восстановления истекла или использована
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: RESET_CHALLENGE_EXPIRED
+                message: Попытка восстановления недействительна
+        "429":
+          $ref: "#/components/responses/TooManyAttempts"
+  /auth/oauth/exchange:
+    post:
+      tags:
+        - ExternalIdentity
+      operationId: exchangeExternalAuthorizationCode
+      summary: Войти через Google или VK ID
+      description:
+        Используется только для входа уже существующего пользователя, который ранее зарегистрирован по
+        номеру телефона и связан с внешней учётной записью. Регистрация нового пользователя через внешний провайдер
+        этой операцией не выполняется.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OAuthExchangeRequest"
+            example:
+              provider: vk_id
+              authorization_code: code_from_provider
+              code_verifier: m1R7sB8fF9yR5cQ3vW2tN6kL4pX8zA1dE0uH7jC5bG2
+              redirect_uri: https://app.example.org/auth/callback
+              device:
+                device_id: web-4e95cfc3-15e4-4b42-bafb-1399c53a5f3d
+                platform: web
+                device_name: Chrome on Windows 11
+      responses:
+        "200":
+          description: Внешняя аутентификация завершена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: Внешняя учётная запись не связана с пользователем системы
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: EXTERNAL_IDENTITY_NOT_LINKED
+                message: Внешняя учётная запись не связана с зарегистрированным пользователем
+  /admin/users/{user_id}/role:
+    patch:
+      tags:
+        - Administration
+      operationId: changeUserRole
+      summary: Изменить роль пользователя
+      description: Доступно только пользователю с ролью ADMIN. Позволяет изменить роль USER/ADMIN.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeRoleRequest"
+            example:
+              role: ADMIN
+      responses:
+        "200":
+          description: Роль изменена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/UserNotFound"
+  /admin/users/{user_id}/status:
+    patch:
+      tags:
+        - Administration
+      operationId: changeUserStatus
+      summary: Изменить статус пользователя
+      description:
+        Доступно только ADMIN. Администратор может заблокировать пользователя или вернуть его в активное
+        состояние.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeStatusRequest"
+            example:
+              status: BLOCKED
+      responses:
+        "200":
+          description: Статус изменён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/UserNotFound"
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    PhoneNumber:
+      type: string
+      pattern: ^\+[1-9][0-9]{7,14}$
+      example: "+79637697590"
+    RegisterStartRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - phone
+      properties:
+        phone:
+          $ref: "#/components/schemas/PhoneNumber"
+    RegisterResendRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - phone
+        - challenge_id
+      properties:
+        phone:
+          $ref: "#/components/schemas/PhoneNumber"
+        challenge_id:
+          type: string
+          format: uuid
+    SmsCodeSentResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - challenge_id
+        - channel
+        - destination_masked
+        - attempts_remaining
+      properties:
+        challenge_id:
+          type: string
+          format: uuid
+          description: ID попытки; сохраняется при повторной отправке кода.
+        channel:
+          type: string
+          const: sms
+        destination_masked:
+          type: string
+          example: +7******7590
+        attempts_remaining:
+          type: integer
+          minimum: 0
+          maximum: 3
+      example:
+        challenge_id: 7d9ee2b2-1ca7-4691-8d89-6e8c012eae17
+        channel: sms
+        destination_masked: +7******7590
+        attempts_remaining: 3
+    RegisterVerifyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - phone
+        - challenge_id
+        - code
+      properties:
+        phone:
+          $ref: "#/components/schemas/PhoneNumber"
+        challenge_id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          pattern: ^[0-9]{5}$
+    RegisterVerifyResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - phone
+        - challenge_id
+        - verified
+      properties:
+        phone:
+          $ref: "#/components/schemas/PhoneNumber"
+        challenge_id:
+          type: string
+          format: uuid
+        verified:
+          type: boolean
+          const: true
+    RegisterCompleteRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - phone
+        - challenge_id
+        - full_name
+        - birth_date
+        - secret_answer
+        - password
+        - device
+      properties:
+        phone:
+          $ref: "#/components/schemas/PhoneNumber"
+        challenge_id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        birth_date:
+          type: string
+          format: date
+        secret_answer:
+          type: string
+          minLength: 1
+          maxLength: 255
+        password:
+          type: string
+          format: password
+        device:
+          $ref: "#/components/schemas/DeviceInput"
+    DeviceInput:
+      type: object
+      additionalProperties: false
+      required:
+        - device_id
+        - platform
+        - device_name
+      properties:
+        device_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        platform:
+          type: string
+          enum:
+            - web
+            - ios
+            - android
+        device_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - phone
+        - password
+        - device
+      properties:
+        phone:
+          $ref: "#/components/schemas/PhoneNumber"
+        password:
+          type: string
+          format: password
+        device:
+          $ref: "#/components/schemas/DeviceInput"
+    LoginChallengeResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - challenge_id
+        - second_factor_required
+        - channel
+        - destination_masked
+        - attempts_remaining
+      properties:
+        challenge_id:
+          type: string
+          format: uuid
+        second_factor_required:
+          type: boolean
+          const: true
+        channel:
+          type: string
+          const: sms
+        destination_masked:
+          type: string
+          example: +7******7590
+        attempts_remaining:
+          type: integer
+          minimum: 0
+          maximum: 3
+      example:
+        challenge_id: 92e901d4-24cd-4529-8238-1fbd9d06e9dc
+        second_factor_required: true
+        channel: sms
+        destination_masked: +7******7590
+        attempts_remaining: 3
+    LoginVerifyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - challenge_id
+        - code
+      properties:
+        challenge_id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          pattern: ^[0-9]{5}$
+    LogoutRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+    TokenPair:
+      type: object
+      additionalProperties: false
+      required:
+        - token_type
+        - access_token
+        - refresh_token
+        - access_expires_in
+        - session_id
+      properties:
+        token_type:
+          type: string
+          const: Bearer
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        access_expires_in:
+          type: integer
+          minimum: 1
+          description: Срок жизни access-токена в секундах.
+          example: 180
+        session_id:
+          type: string
+          format: uuid
+      example:
+        token_type: Bearer
+        access_token: eyJhbGciOiJSUzI1NiJ9.example.signature
+        refresh_token: rt_01J5MQ2SS03TMGFXYBJVCRH86B
+        access_expires_in: 180
+        session_id: 6a86e8ee-3984-456b-aa75-01aef0b19a8f
+    AuthResult:
+      type: object
+      additionalProperties: false
+      required:
+        - tokens
+        - user
+      properties:
+        tokens:
+          $ref: "#/components/schemas/TokenPair"
+        user:
+          $ref: "#/components/schemas/UserProfile"
+    UserProfile:
+      type: object
+      additionalProperties: false
+      required:
+        - user_id
+        - full_name
+        - phone
+        - birth_date
+        - role
+        - status
+        - two_factor
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        phone:
+          $ref: "#/components/schemas/PhoneNumber"
+        birth_date:
+          type: string
+          format: date
+        role:
+          $ref: "#/components/schemas/UserRole"
+        status:
+          $ref: "#/components/schemas/UserStatus"
+        two_factor:
+          $ref: "#/components/schemas/TwoFactorSettings"
+      example:
+        user_id: 16b1809c-7644-4e98-b88c-4291953722ce
+        full_name: Иванов Иван Иванович
+        phone: "+79637697590"
+        birth_date: "1994-02-18"
+        role: USER
+        status: ACTIVE
+        two_factor:
+          enabled: true
+          channel: sms
+    UserRole:
+      type: string
+      enum:
+        - USER
+        - ADMIN
+    UserStatus:
+      type: string
+      enum:
+        - ACTIVE
+        - BLOCKED
+        - INACTIVE
+      description: "Статусы пользователя: активный, заблокированный, неактивный."
+    SessionListResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - max_devices
+      properties:
+        items:
+          type: array
+          maxItems: 3
+          items:
+            $ref: "#/components/schemas/Session"
+        max_devices:
+          type: integer
+          const: 3
+      example:
+        items:
+          - session_id: 6a86e8ee-3984-456b-aa75-01aef0b19a8f
+            device_id: web-4e95cfc3-15e4-4b42-bafb-1399c53a5f3d
+            platform: web
+            device_name: Chrome on Windows 11
+            current: true
+            created_at: "2026-08-11T14:04:00Z"
+            last_activity_at: "2026-08-11T14:06:22Z"
+        max_devices: 3
+    Session:
+      type: object
+      additionalProperties: false
+      required:
+        - session_id
+        - device_id
+        - platform
+        - device_name
+        - current
+        - created_at
+        - last_activity_at
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+        platform:
+          type: string
+          enum:
+            - web
+            - ios
+            - android
+        device_name:
+          type: string
+        current:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_activity_at:
+          type: string
+          format: date-time
+    TwoFactorSettingsRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+        current_password:
+          type: string
+          format: password
+          description: Обязателен при enabled=false для повторной проверки личности.
+      allOf:
+        - if:
+            properties:
+              enabled:
+                const: false
+            required:
+              - enabled
+          then:
+            required:
+              - current_password
+    TwoFactorSettings:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+        - channel
+      properties:
+        enabled:
+          type: boolean
+        channel:
+          type: string
+          const: sms
+      example:
+        enabled: true
+        channel: sms
+    OAuthExchangeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - provider
+        - authorization_code
+        - code_verifier
+        - redirect_uri
+        - device
+      properties:
+        provider:
+          type: string
+          enum:
+            - google
+            - vk_id
+        authorization_code:
+          type: string
+        code_verifier:
+          type: string
+        redirect_uri:
+          type: string
+          format: uri
+        device:
+          $ref: "#/components/schemas/DeviceInput"
+    ChangeRoleRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - role
+      properties:
+        role:
+          $ref: "#/components/schemas/UserRole"
+    ChangeStatusRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - BLOCKED
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    PasswordResetStartRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - phone
+      properties:
+        phone:
+          $ref: "#/components/schemas/PhoneNumber"
+    PasswordResetConfirmRequest:
+      oneOf:
+       - type: object
+         additionalProperties: false
+         required:
+           - phone
+           - secret_answer
+           - new_password
+           - new_password_confirmation
+         properties:
+           phone:
+             $ref: "#/components/schemas/PhoneNumber"
+           secret_answer:
+             type: string
+             minLength: 1
+             maxLength: 255
+           new_password:
+             type: string
+             format: password
+           new_password_confirmation:
+             type: string
+             format: password
+       - type: object
+          additionalProperties: false
+          required:
+            - phone
+            - challenge_id
+            - code
+            - new_password
+            - new_password_confirmation
+          properties:
+            phone:
+              $ref: "#/components/schemas/PhoneNumber"
+            challenge_id:
+              type: string
+              format: uuid
+            code:
+              type: string
+              pattern: ^[0-9]{5}$
+            new_password:
+              type: string
+              format: password
+            new_password_confirmation:
+              type: string
+              format: password
+  responses:
+    ValidationError:
+      description: Некорректные входные данные
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            code: VALIDATION_ERROR
+            message: Переданы некорректные данные запроса
+    Unauthorized:
+      description: Требуется действующая аутентификация
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            code: UNAUTHORIZED
+            message: Access-токен отсутствует, истёк или недействителен
+    Forbidden:
+      description: Недостаточно прав для операции
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            code: FORBIDDEN
+            message: Недостаточно прав для выполнения операции
+    UserNotFound:
+      description: Пользователь не найден
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            code: USER_NOT_FOUND
+            message: Пользователь не найден
+    TooManyAttempts:
+      description: Превышен лимит попыток или частоты запросов
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            code: TOO_MANY_ATTEMPTS
+            message: Превышен допустимый лимит попыток
+    InvalidVerificationCode:
+      description: Код подтверждения неверен
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            code: INVALID_VERIFICATION_CODE
+            message: Код подтверждения неверен
