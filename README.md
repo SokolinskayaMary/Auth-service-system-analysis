@@ -63,7 +63,7 @@
 | `02-business-processes` |[BPMN-диаграммы бизнес-процессов](docs/02-business-processes/README.md) |
 | `03-architecture` | [Архитектура](docs/03-architecture/architecture.md), [Обоснование проектных решений](docs/03-architecture/desicion.md) |
 | `04-uml` | [Sequence- и State-диаграммы](docs/04-uml/README.md) |
-| `05-api` | OpenAPI 3.1-спецификация REST API |
+| `05-api` | [OpenAPI 3.1-спецификация REST API](docs/05-api/README.md) |
 | `06-database` | Реляционная модель PostgreSQL, ERD, DBML |
 
 ## Инструменты и технологии
