@@ -501,7 +501,7 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/PasswordResetConfirmRequest"
-            example:
+            examples:
               secretQuestion:
                summary: Восстановление по секретному вопросу
                value:
@@ -1159,28 +1159,28 @@ components:
              type: string
              format: password
        - type: object
-          additionalProperties: false
-          required:
-            - phone
-            - challenge_id
-            - code
-            - new_password
-            - new_password_confirmation
-          properties:
-            phone:
-              $ref: "#/components/schemas/PhoneNumber"
-            challenge_id:
-              type: string
-              format: uuid
-            code:
-              type: string
-              pattern: ^[0-9]{5}$
-            new_password:
-              type: string
-              format: password
-            new_password_confirmation:
-              type: string
-              format: password
+         additionalProperties: false
+         required:
+           - phone
+           - challenge_id
+           - code
+           - new_password
+           - new_password_confirmation
+         properties:
+           phone:
+             $ref: "#/components/schemas/PhoneNumber"
+           challenge_id:
+             type: string
+             format: uuid
+           code:
+             type: string
+             pattern: ^[0-9]{5}$
+           new_password:
+             type: string
+             format: password
+           new_password_confirmation:
+             type: string
+             format: password
   responses:
     ValidationError:
       description: Некорректные входные данные
